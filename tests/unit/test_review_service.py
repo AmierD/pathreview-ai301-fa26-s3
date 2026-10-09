@@ -6,10 +6,12 @@ from uuid import uuid4
 import pytest
 
 from core.services.review_service import (
+    _run_ingestion_pipeline,
     create_review,
     get_review,
     list_reviews,
 )
+from ingestion.pipeline import IngestResult
 
 
 @pytest.mark.unit
@@ -377,3 +379,61 @@ class TestReviewService:
 
         # Should order by created_at descending
         mock_db_session.execute.assert_called_once()
+
+
+@pytest.mark.unit
+class TestPortfolioIngestion:
+    """Test suite for the portfolio branch of _run_ingestion_pipeline."""
+
+    @pytest.fixture
+    def mock_db_session(self):
+        """Create a mock async database session."""
+        session = AsyncMock()
+        session.add = Mock()
+        return session
+
+    @pytest.fixture
+    def portfolio_profile(self):
+        """Create a profile with only a portfolio URL."""
+        profile = Mock()
+        profile.id = uuid4()
+        profile.github_username = None
+        profile.resume_text = None
+        profile.portfolio_url = "https://janedoe.dev"
+        return profile
+
+    @pytest.mark.asyncio
+    async def test_portfolio_is_ingested_and_recorded(self, mock_db_session, portfolio_profile):
+        """Test that the portfolio is ingested and an ingested_sources row is added."""
+        result = IngestResult(source_id="portfolio_abc", chunk_count=3, skipped=False)
+
+        with patch("core.services.review_service._ingest_portfolio", return_value=result) as ingest:
+            sources = await _run_ingestion_pipeline(mock_db_session, portfolio_profile)
+
+        ingest.assert_called_once_with(str(portfolio_profile.id), "https://janedoe.dev")
+        assert sources == [
+            {
+                "source_type": "portfolio",
+                "url": "https://janedoe.dev",
+                "source_id": "portfolio_abc",
+                "chunk_count": 3,
+            }
+        ]
+        row = mock_db_session.add.call_args[0][0]
+        assert row.source_type == "portfolio"
+        assert row.source_url == "https://janedoe.dev"
+        assert row.chunk_count == 3
+        mock_db_session.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_portfolio_failure_does_not_stop_review(self, mock_db_session, portfolio_profile):
+        """Test that a refused or failed fetch adds no row and the pipeline still finishes."""
+        with patch(
+            "core.services.review_service._ingest_portfolio",
+            side_effect=ValueError("URL resolves to a non-public address"),
+        ):
+            sources = await _run_ingestion_pipeline(mock_db_session, portfolio_profile)
+
+        assert sources == []
+        mock_db_session.add.assert_not_called()
+        mock_db_session.commit.assert_awaited_once()

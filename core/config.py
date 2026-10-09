@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str = Field(default="")
     openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
     openrouter_model: str = Field(default="google/gemma-3-27b-it:free")
+    embedding_provider: str = Field(default="mock")
 
     # Application
     app_env: str = Field(default="development")

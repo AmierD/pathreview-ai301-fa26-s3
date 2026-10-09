@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime
 from uuid import UUID
@@ -6,9 +7,13 @@ import structlog
 from sqlalchemy import and_, select
 
 from api.schemas.review import FeedbackSection
+from core.config import settings
 from core.models.ingested_source import IngestedSource
 from core.models.profile import Profile
 from core.models.review import Review
+from ingestion.embeddings.provider import get_embedding_provider
+from ingestion.pipeline import IngestionPipeline, IngestResult
+from rag.retriever.vector_store import VectorStore
 
 log = structlog.get_logger()
 
@@ -230,19 +235,25 @@ async def _run_ingestion_pipeline(db, profile: Profile) -> list[dict]:
     # Ingest from portfolio URL if available
     if profile.portfolio_url:
         try:
-            # Placeholder: actual portfolio ingestion logic
-            portfolio_data = {
-                "source_type": "portfolio",
-                "url": profile.portfolio_url,
-                "data": f"Portfolio data from {profile.portfolio_url}",
-            }
-            sources.append(portfolio_data)
+            # The pipeline is synchronous (fetch, embed, store), so keep it off the event loop
+            result = await asyncio.to_thread(
+                _ingest_portfolio, str(profile.id), profile.portfolio_url
+            )
+            sources.append(
+                {
+                    "source_type": "portfolio",
+                    "url": profile.portfolio_url,
+                    "source_id": result.source_id,
+                    "chunk_count": result.chunk_count,
+                }
+            )
 
             # Store in database
             ingested = IngestedSource(
                 profile_id=profile.id,
                 source_type="portfolio",
-                raw_data=json.dumps(portfolio_data),
+                source_url=profile.portfolio_url,
+                chunk_count=result.chunk_count,
             )
             db.add(ingested)
         except Exception as exc:
@@ -278,6 +289,16 @@ async def _run_ingestion_pipeline(db, profile: Profile) -> list[dict]:
 
     await db.commit()
     return sources
+
+
+def _ingest_portfolio(profile_id: str, url: str) -> IngestResult:
+    """Fetch a portfolio page and store its chunks in the profile's vector collection."""
+    pipeline = IngestionPipeline(
+        vector_db=VectorStore().get_collection(f"profile_{profile_id}"),
+        db_session=None,
+        embedding_provider=get_embedding_provider(settings.embedding_provider),
+    )
+    return pipeline.ingest_portfolio(profile_id, url)
 
 
 async def _run_agent_orchestration(profile: Profile, ingestion_results: list[dict]) -> dict:
