@@ -3,6 +3,7 @@ from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from pydantic import ValidationError
 
 from api.middleware.auth import get_current_user
 from api.schemas.profile import ProfileCreate, ProfileResponse, ProfileUpdate
@@ -98,6 +99,11 @@ async def create_profile_endpoint(
 
     except HTTPException:
         raise
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.errors(include_url=False, include_context=False, include_input=False),
+        )
     except Exception as exc:
         log.error("profile_creation_error", error=str(exc))
         await db.rollback()
