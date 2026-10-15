@@ -205,7 +205,7 @@ async def _run_ingestion_pipeline(db, profile: Profile) -> list[dict]:
     Run ingestion pipeline to extract data from profile sources.
     Returns list of ingested source data.
     """
-    sources = []
+    sources: list[dict] = []
 
     # Ingest from GitHub if available
     if profile.github_username:
